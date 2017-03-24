@@ -11,7 +11,7 @@
 // Class variables
 //******************************************************************************
 
-EVENT_ID SonarPlatform::OBSTACLE_EVENT = EventSource::GenerateEventID();
+//EVENT_ID SonarPlatform::OBSTACLE_EVENT = EventSource::GenerateEventID();
 
 static DebugHelper Debug("SonarPlatform");
 

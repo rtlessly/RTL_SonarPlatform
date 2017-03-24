@@ -13,7 +13,7 @@ class SonarPlatform : public IEventListener, public EventSource
     // Class variables
     //**************************************************************************
 
-    public: static EVENT_ID OBSTACLE_EVENT;
+    public: static const EVENT_ID OBSTACLE_EVENT = (EventSourceID::SonarPlatform | EventCode::Obstacle);
 
     public: typedef struct SonarPing_struct
     {
