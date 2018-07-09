@@ -1,8 +1,8 @@
 #define DEBUG 0
 
 #include <Arduino.h>
-#include <RTL_Stdlib.h>
 #include <Debug.h>
+#include <Timer.h>
 #include <EventBinding.h>
 #include "SonarPlatform.h"
 
@@ -10,10 +10,7 @@
 //******************************************************************************
 // Class variables
 //******************************************************************************
-
-//EVENT_ID SonarPlatform::OBSTACLE_EVENT = EventSource::GenerateEventID();
-
-static DebugHelper Debug("SonarPlatform");
+DEFINE_CLASSNAME(SonarPlatform);
 
 static EventBinding SonarSensorBinding;
 
@@ -21,37 +18,39 @@ static int _triggerCount = 0;
 
 static uint32_t _startDelayTime = 0;
 
+static Timer _timer;
+
 
 //******************************************************************************
 // Constructor
 //******************************************************************************
-SonarPlatform::SonarPlatform(const SonarSensor& sonar)
+SonarPlatform::SonarPlatform(SonarSensor& sonar)
 {
+    _id = "SonarPlatform";
     _sonar = &sonar;
     _asyncEnabled = false;
     _azimuthBias = 0;
     _tiltBias = 0;
     SonarSensorBinding.Bind(*this, *_sonar);
-//   sonar.Attach(*this);
 }
 
 
 void SonarPlatform::OnEvent(const Event* pEvent)
 {
-    WithEvent(pEvent)
-        When(SonarSensor::SONAR_EVENT)
+    switch (pEvent->EventID)
+	{
+        case SonarSensor::SONAR_EVENT:
         {
-            uint16_t distance = PingTimeToCentimeters(pEvent->Data.UnsignedLong);
+            auto distance = PingTimeToCentimeters(pEvent->Data.UnsignedLong);
 
-            Debug.Log("%s SONAR_EVENT(%i)", __func__, distance);
+            TRACE(Logger(_classname_, this) << F("SONAR_EVENT distance=") << distance << endl);
 
             if (0 < distance && distance < _detectionDistance)
             {
                 if (++_triggerCount >= 3)
                 {
-                    DispatchEvent(OBSTACLE_EVENT, distance);
-//                    Event event(OBSTACLE_EVENT, distance);
-//                    DispatchEvent(&event);
+                    QueueEvent(OBSTACLE_EVENT, distance);
+                    //DispatchEvent(OBSTACLE_EVENT, distance);
                 }
             }
             else
@@ -59,11 +58,34 @@ void SonarPlatform::OnEvent(const Event* pEvent)
                 _triggerCount = 0;
             }
         }
+		break;
+        
+        case TimerFiredEvent:
+        {
+            TRACE(Logger(_classname_, this) << F("TIMER_EVENT") << endl);
+
+            if (NextScanPing())
+            {
+                _timer.Start(100); // Allow time for platform to move to next position and ping
+            }
+            else
+            {
+				Logger(_classname_, this) << F("QUEUE SCAN_COMPLETE_EVENT") << endl;
+                QueueEvent(SCAN_COMPLETE_EVENT, (int16_t)_bestPing.Angle);
+            }
+        }
+		break;
+		
+		default:
+		break;
+	}
 }
 
 
 void SonarPlatform::Poll()
 {
+    //TRACE(Logger(_classname_, this) << F("Poll") << endl);
+
     // Start another async ping
     if (_asyncEnabled && _sonar->Ready() && (millis() > _startDelayTime)) _sonar->PingAsync();
 }
@@ -87,6 +109,12 @@ uint16_t SonarPlatform::Ping()
 void SonarPlatform::StartObstacleDetection(int azAngle, int tiltAngle, uint16_t distance)
 {
     Deploy(azAngle, tiltAngle);
+    StartObstacleDetection(distance);
+}
+
+
+void SonarPlatform::StartObstacleDetection(uint16_t distance)
+{
     _detectionDistance = distance;
     _asyncEnabled = true;
     _startDelayTime = millis() + 500;
@@ -109,11 +137,14 @@ void SonarPlatform::StartScan(int tiltAngle)
     _nextSlot = 0;
     ZERO_ARRAY(_last5Pings);
     Deploy(_scanAngle, tiltAngle);
+    _timer.Attach(*this);
+    _timer.Start(500);
 }
 
 
 bool SonarPlatform::NextScanPing()
 {
+	Logger(_classname_, this) << F("NextScanPing") << endl;
     ScanPing();
 
     if ((_scanAngle += 10) > 180) return false;
@@ -126,16 +157,13 @@ bool SonarPlatform::NextScanPing()
 
 uint16_t SonarPlatform::ScanPing()
 {
-    while (!_sonar->Ready());
-
-    uint16_t ping = _sonar->PingMedian();
-
-    // If we got no echo that means the distance is greated than can be measured, so set to max distance
-    // Otherwise, convert ping  time to centimeters
-    ping = (ping == NO_ECHO) ? MAX_SENSOR_DISTANCE : PingTimeToCentimeters(ping);
-
     const int lastIndex = LAST_INDEX(_last5Pings);
     
+    //while (!_sonar->Ready());
+
+    auto pingTime = _sonar->PingMedian();
+    auto ping = PingTimeToCentimeters(pingTime);
+
     if (_nextSlot > lastIndex)
     {
         SHIFT_ARRAY_LEFT(_last5Pings);
@@ -151,14 +179,15 @@ uint16_t SonarPlatform::ScanPing()
 
         if (computedPing > _bestPing.Ping)
         {
-            //Debug.Log("%s: _bestPing.Angle=%i, _bestPing.Ping=%i", __func__, _bestPing.Angle, _bestPing.Ping);
-            //Debug.Log("%s: _last5Pings[2].Angle=%i, computedPing=%i", __func__, _last5Pings[2].Angle, computedPing);
             _bestPing.Set(_last5Pings[2].Angle, computedPing);
-            //Debug.Log("%s: _bestPing.Angle=%i, _bestPing.Ping=%i", __func__, _bestPing.Angle, _bestPing.Ping);
         }
     }
 
-    Debug.Log("%s: angle=%i, ping=%i, bestPing.Angle=%i, bestPing.Ping=%i", __func__, _scanAngle, ping, _bestPing.Angle, _bestPing.Ping);
+    TRACE(Logger(_classname_, this) << F("ScanPing: _scanAngle=") << _scanAngle 
+                                    << F(", ping=") << ping  
+                                    << F(", _bestPing.Angle=") << _bestPing.Angle 
+                                    << F(", _bestPing.Ping=") << _bestPing.Ping 
+	                                << endl);
 
     return ping;
 }
@@ -166,9 +195,9 @@ uint16_t SonarPlatform::ScanPing()
 
 uint16_t SonarPlatform::ProcessPings(SonarPing pings[], int arraySize)
 {
-    Debug.Log("%s: arraySize=%i", __func__, arraySize);
+    TRACE(Logger(_classname_, this) << F("ProcessPings: arraySize=") << arraySize << endl);
 
-    //for (int i=0; i < arraySize; i++) Debug.Log("%s: pings[%i].Angle=%i, pings[%i].Ping=%i", __func__, i, pings[i].Angle, i, pings[i].Ping);
+    //for (int i=0; i < arraySize; i++) Debug.Log(this) << _func__ << F(": pings[") << i << F("]: Angle=") << pings[i].Angle << F("Ping=") << pings[i].Ping << endl;
 
     SonarPing sortedPings[arraySize];
     
@@ -181,16 +210,19 @@ uint16_t SonarPlatform::ProcessPings(SonarPing pings[], int arraySize)
         for (int j = i+1; j < arraySize; j++)
             if (sortedPings[j].Ping < sortedPings[i].Ping) swap(sortedPings[i], sortedPings[j]);
 
-    //for (int i=0; i < arraySize; i++) Debug.Log("%s: sortedPings[%i].Angle=%i, sortedPings[%i].Ping=%i", __func__, i, sortedPings[i].Angle, i, sortedPings[i].Ping);
-
-    // Compute statitical parameters of data set
+    // Compute statistical parameters of data set
     int median = sortedPings[arraySize / 2].Ping;       // median value
     int q1     = sortedPings[arraySize / 4].Ping;       // First quartile value
     int q3     = sortedPings[arraySize * 3 / 4].Ping;   // Third quartile value
     int iqr    = (q3 - q1)+ 1;                          // Inter-quartile range
     int upperOutlierLimit = q3 + (iqr * 2);             // limit value for detecting upper outliers
 
-    Debug.Log("%s: median=%i, q1=%i, q3=%i, iqr=%i, upperOutlierLimit=%i", __func__, median, q1,q3, iqr, upperOutlierLimit);
+    TRACE(Logger(_classname_, this) << F("ProcessPings: median=") << median
+                                    << F(", q1=") << q1 	
+                                    << F(", q3=") << q3 	
+                                    << F(", iqr=") << iqr 	
+                                    << F(", upperOutlierLimit=") << upperOutlierLimit 	
+	                                << endl);
 
     // Compute moving average, filtering out upper outliers as these may represent failed pings
     uint16_t avg = 0;
@@ -207,7 +239,7 @@ uint16_t SonarPlatform::ProcessPings(SonarPing pings[], int arraySize)
 
     avg = (avg / count); // Count should never be zero as all data points can't be outliers
 
-    Debug.Log("%s: Adjusted Ping=%i", __func__, avg);
+    TRACE(Logger(_classname_, this) << F("ProcessPings: Adjusted Ping=") << avg << endl);
 
     return avg;
 }

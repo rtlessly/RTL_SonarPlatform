@@ -3,17 +3,23 @@
 
 #include <inttypes.h>
 #include <Servo.h>
+#include <RTL_StdLib.h>
 #include <EventSource.h>
 #include <SonarSensor.h>
 
 
 class SonarPlatform : public IEventListener, public EventSource
 {
+	DECLARE_CLASSNAME;
+
     //**************************************************************************
     // Class variables
     //**************************************************************************
 
-    public: static const EVENT_ID OBSTACLE_EVENT = (EventSourceID::SonarPlatform | EventCode::Obstacle);
+    public: static const EVENT_ID PING_EVENT          = (EventSourceID::SonarPlatform | 0x00F0);
+    public: static const EVENT_ID OBSTACLE_EVENT      = (EventSourceID::SonarPlatform | EventCode::Obstacle);
+    public: static const EVENT_ID SCAN_COMPLETE_EVENT = (EventSourceID::SonarPlatform | 0x00F1);
+
 
     public: typedef struct SonarPing_struct
     {
@@ -36,13 +42,13 @@ class SonarPlatform : public IEventListener, public EventSource
     //**************************************************************************
     // Constructor
     //**************************************************************************
-    public: SonarPlatform(const SonarSensor& sonar);
+    public: SonarPlatform(SonarSensor& sonar);
 
     //**************************************************************************
     // Public interface
     //**************************************************************************
     public: void AttachServos(uint8_t azServoPin, uint8_t tiltServoPin);
-
+	
     public: void SetPlatformBias(int azBias=0, int tiltBias=0) { _azimuthBias = azBias; _tiltBias = tiltBias; };
 
     public: void Deploy(int azAngle=90, int tiltAngle=90) { Azimuth(azAngle); Tilt(tiltAngle); };
@@ -62,6 +68,8 @@ class SonarPlatform : public IEventListener, public EventSource
     public: SonarPing BestPing() { return _bestPing; }
 
     public: void StartObstacleDetection(int azAngle, int tiltAngle, uint16_t distance);
+
+    public: void StartObstacleDetection(uint16_t distance);
 
     public: void StopObstacleDetection();
 
@@ -86,7 +94,6 @@ class SonarPlatform : public IEventListener, public EventSource
     private: uint8_t  _nextSlot;
     private: SonarPing _last5Pings[5];
     private: SonarPing _bestPing;
-
     private: bool _asyncEnabled;
 };
 
